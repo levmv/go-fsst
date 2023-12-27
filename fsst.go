@@ -16,9 +16,6 @@ type SymbolTable struct {
 func NewSymbolTable() *SymbolTable {
 	st := SymbolTable{}
 	st.Symbols = make([][]byte, 256)
-	/*for i := range st.Symbols {
-		st.Symbols[i] = []byte
-	}*/
 
 	for i := 0; i < 256; i += 1 {
 		st.Symbols[i] = append(st.Symbols[i], byte(i))
@@ -60,28 +57,7 @@ func (st *SymbolTable) CompressCount(count1 *[512]byte, count2 *[512][512]byte, 
 			count2[code1][code2] += 1
 			code1 = code2
 		}
-
 	}
-	/*for _, str := range text {
-
-		str := []byte(str)
-		pos := 0
-		prev := st.FindLongestSymbol(str[pos:])
-		code := uint16(prev)
-		for (pos + len(st.Symbols[code])) < len(str) {
-			pos += len(st.Symbols[code])
-			prev = code
-			code = uint16(st.FindLongestSymbol(str[pos:]))
-			count1[code] += 1
-			count2[prev][code] += 1
-			if code >= 256 {
-				nextByte := str[pos]
-				count1[nextByte] += 1
-				count2[prev][nextByte] += 1
-			}
-
-		}
-	}*/
 }
 
 func (st *SymbolTable) MakeTable(count1 [512]byte, count2 [512][512]byte) *SymbolTable {
@@ -105,7 +81,6 @@ func (st *SymbolTable) MakeTable(count1 [512]byte, count2 [512][512]byte) *Symbo
 			return
 		}
 		candMap[symbol] = gain
-		return
 	}
 
 	for code := 0; code < 512; code += 1 {
