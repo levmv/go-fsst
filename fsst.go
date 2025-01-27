@@ -137,6 +137,7 @@ type Decompressor struct {
 func NewDecompressor(dict []byte) *Decompressor {
 	d := Decompressor{}
 	d.table = LoadTable(dict)
+	d.table.MakeIndex()
 	return &d
 }
 
