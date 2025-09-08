@@ -1,7 +1,6 @@
 package fsst
 
 import (
-	"fmt"
 	"sort"
 )
 
@@ -16,7 +15,7 @@ type symbolTable struct {
 	Symbols  [][]byte
 }
 
-func NewSymbolTable() *symbolTable {
+func newSymbolTable() *symbolTable {
 	st := symbolTable{}
 	st.Symbols = make([][]byte, 256)
 
@@ -26,26 +25,30 @@ func NewSymbolTable() *symbolTable {
 	return &st
 }
 
-func LoadTable(in []byte) *symbolTable {
-	st := NewSymbolTable()
-	from := 8
-	for i := 0; i < 8; i++ {
+func newSymbolTableFromDict(in []byte) *symbolTable {
+	st := newSymbolTable()
+
+	from := MaxSymbolLength
+	for i := 0; i < MaxSymbolLength; i++ {
 		n := int(in[i])
 		for j := 0; j < n; j++ {
-			to := from + int(8-i)
-			st.Insert(string(in[from:to]))
+			to := from + int(MaxSymbolLength-i)
+			st.insert(string(in[from:to]))
 			from = to
 		}
 	}
+
+	st.makeIndex()
+
 	return st
 }
 
-func (st *symbolTable) Insert(s string) {
+func (st *symbolTable) insert(s string) {
 	st.Symbols = append(st.Symbols, []byte(s))
 	st.Nsymbols += 1
 }
 
-func (st *symbolTable) FindLongestSymbol(text []byte) (uint16, int) {
+func (st *symbolTable) findLongestSymbol(text []byte) (uint16, int) {
 	letter := text[0]
 	code := st.Index[int(letter)]
 	textLen := len(text)
@@ -65,40 +68,17 @@ func (st *symbolTable) FindLongestSymbol(text []byte) (uint16, int) {
 	return uint16(letter), 1
 }
 
-func (st *symbolTable) MakeIndex() {
+func (st *symbolTable) makeIndex() {
 	sort.Slice(st.Symbols[256:256+st.Nsymbols], func(i, j int) bool {
 		if st.Symbols[256+i][0] == st.Symbols[256+j][0] {
 			return len(st.Symbols[256+i]) > len(st.Symbols[256+j])
 		}
 		return string(st.Symbols[256+i]) < string(st.Symbols[256+j])
 	})
-	for i := st.Nsymbols - 1; i > 0; i -= 1 {
+	for i := st.Nsymbols - 1; i >= 0; i-- {
 		st.Index[int(st.Symbols[i+256][0])] = 256 + i
 	}
 	st.Index[256] = 256 + st.Nsymbols
-}
-
-func (st *symbolTable) Print() {
-	for i := 256; i < 256+st.Nsymbols; i += 1 {
-		fmt.Printf("%v ", string(st.Symbols[i]))
-	}
-	fmt.Println("")
-}
-
-func LoadSymbolTable(in []byte) *symbolTable {
-	st := NewSymbolTable()
-
-	from := 8
-	for i := 0; i < 8; i++ {
-		n := int(in[i])
-		for j := 0; j < n; j++ {
-			to := from + int(8-i)
-			st.Insert(string(in[from:to]))
-			from = to
-		}
-	}
-	st.MakeIndex()
-	return st
 }
 
 type Compressor struct {
@@ -107,8 +87,7 @@ type Compressor struct {
 
 func NewCompressor(dict []byte) *Compressor {
 	d := Compressor{}
-	d.table = LoadTable(dict)
-	d.table.MakeIndex()
+	d.table = newSymbolTableFromDict(dict)
 	return &d
 }
 
@@ -118,7 +97,7 @@ func (c *Compressor) Compress(input []byte) []byte {
 	pos := 0
 
 	for pos < len(input) {
-		code, len := c.table.FindLongestSymbol(input[pos:])
+		code, len := c.table.findLongestSymbol(input[pos:])
 		if code < 256 {
 			compressed = append(compressed, 0xff, input[pos])
 			pos += 1
@@ -130,30 +109,62 @@ func (c *Compressor) Compress(input []byte) []byte {
 	return compressed
 }
 
+const (
+	MaxSize = NumSymbols * MaxSymbolLength
+)
+
 type Decompressor struct {
-	table *symbolTable
+	data [MaxSize]byte
+	lens [NumSymbols]byte
 }
 
 func NewDecompressor(dict []byte) *Decompressor {
 	d := Decompressor{}
-	d.table = LoadTable(dict)
-	d.table.MakeIndex()
+	st := newSymbolTableFromDict(dict)
+
+	off := 0
+	for i := 0; i < st.Nsymbols; i++ {
+		symIdx := 256 + i
+		sym := st.Symbols[symIdx]
+		symLen := len(sym)
+		d.lens[i] = byte(symLen)
+		copy(d.data[off:off+symLen], sym)
+		off += MaxSymbolLength
+	}
 	return &d
 }
 
 func (d *Decompressor) Decompress(input []byte) []byte {
-	output := make([]byte, 0, len(input)*3)
-	pos := 0
-
-	for pos < len(input) {
-		if input[pos] == 255 {
-			pos++
-			output = append(output, input[pos])
+	outputSize := 0
+	var scanPos uint
+	for scanPos < uint(len(input)) {
+		code := input[scanPos]
+		if code == 0xff {
+			outputSize++
+			scanPos += 2 // Skip escape marker and literal byte
 		} else {
-			output = append(output, d.table.Symbols[256+int(input[pos])]...)
+			outputSize += int(d.lens[code])
+			scanPos++
 		}
-		pos += 1
 	}
 
+	output := make([]byte, outputSize)
+
+	var pos, dst uint
+
+	for pos < uint(len(input)) {
+		code := input[pos]
+		if code == 0xff {
+			output[dst] = input[pos+1]
+			dst++
+			pos += 2
+		} else {
+			symLen := uint(d.lens[code])
+			from := uint(code) << 3
+			copy(output[dst:dst+symLen], d.data[from:from+symLen])
+			dst += symLen
+			pos++
+		}
+	}
 	return output
 }

@@ -4,20 +4,29 @@ import (
 	"container/heap"
 )
 
+// Build creates an FSST dictionary from a slice of sample strings.
+func Build(text []string) []byte {
+	var b builder
+	return b.build(text)
+}
+
 const (
 	SampleTarget = 1 << 14
 	SampleMax    = 1 << 15
 	SampleLine   = 512
+
+	MaxSymbolLength = 8
+	NumSymbols      = 256
 )
 
-type Builder struct {
+type builder struct {
 	table  *symbolTable
 	count1 [512]int16
 	count2 [512][512]int16
 }
 
-func (b *Builder) Build(text []string) []byte {
-	b.table = NewSymbolTable()
+func (b *builder) build(text []string) []byte {
+	b.table = newSymbolTable()
 
 	for sampleFrac := 8; sampleFrac <= 128; sampleFrac += 30 {
 		b.compressCount(sampleFrac, text)
@@ -26,10 +35,10 @@ func (b *Builder) Build(text []string) []byte {
 		b.count1 = [512]int16{}
 		b.count2 = [512][512]int16{}
 	}
-	return b.Finnalize()
+	return b.finalize()
 }
 
-func (b *Builder) compressCount(sf int, text []string) int {
+func (b *builder) compressCount(sf int, text []string) int {
 	var compressedSize int
 	for i, str := range text {
 		if sf < 128 && int(fsst_hash(uint64(i))&127) > sf {
@@ -42,7 +51,7 @@ func (b *Builder) compressCount(sf int, text []string) int {
 			continue
 		}
 		var code2 uint16
-		code1, len1 := b.table.FindLongestSymbol(str[cur:])
+		code1, len1 := b.table.findLongestSymbol(str[cur:])
 		for {
 			b.count1[code1] += 1
 			cur += len1 // len(b.table.Symbols[code1])
@@ -52,7 +61,7 @@ func (b *Builder) compressCount(sf int, text []string) int {
 				break
 			}
 
-			code2, len1 = b.table.FindLongestSymbol(str[cur:])
+			code2, len1 = b.table.findLongestSymbol(str[cur:])
 			b.count2[code1][code2] += 1
 			code1 = code2
 		}
@@ -60,9 +69,9 @@ func (b *Builder) compressCount(sf int, text []string) int {
 	return compressedSize
 }
 
-func (b *Builder) makeTable() *symbolTable {
+func (b *builder) makeTable() *symbolTable {
 	pq := priorityQueue{}
-	nst := NewSymbolTable()
+	nst := newSymbolTable()
 	addCandidate := func(symbol string, count int) {
 		gain := len(symbol) * count
 
@@ -83,7 +92,7 @@ func (b *Builder) makeTable() *symbolTable {
 		for code2 := 0; code2 < 512; code2 += 1 {
 			if b.count2[code1][code2] > 0 {
 				s1 := b.table.Symbols[code1]
-				if len(s1)+len(b.table.Symbols[code2]) > 8 {
+				if len(s1)+len(b.table.Symbols[code2]) > MaxSymbolLength {
 					continue
 				}
 				s := string(s1) + string(b.table.Symbols[code2])
@@ -94,16 +103,16 @@ func (b *Builder) makeTable() *symbolTable {
 
 	for nst.Nsymbols < 255 && pq.Len() > 0 {
 		item := heap.Pop(&pq).(*Item)
-		nst.Insert(item.value)
+		nst.insert(item.value)
 	}
-	nst.MakeIndex()
+	nst.makeIndex()
 	return nst
 }
 
-func (b *Builder) Finnalize() []byte {
+func (b *builder) finalize() []byte {
 	output := []byte{0, 0, 0, 0, 0, 0, 0, 0}
 
-	for i := 8; i > 0; i -= 1 {
+	for i := MaxSymbolLength; i > 0; i -= 1 {
 		var curLen uint8 = 0
 		for j := 256; j < 256+b.table.Nsymbols; j += 1 {
 			if len(b.table.Symbols[j]) == i {
@@ -111,7 +120,7 @@ func (b *Builder) Finnalize() []byte {
 				curLen += 1
 			}
 		}
-		output[8-i] = curLen
+		output[MaxSymbolLength-i] = curLen
 	}
 	return output
 }
