@@ -39,13 +39,13 @@ func TestRoundtrip(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			dict := Build(tc.inputs)
 
-			c := NewCompressor(dict)
-			d := NewDecompressor(dict)
+			c, _ := NewCompressor(dict)
+			d, _ := NewDecompressor(dict)
 
 			for _, origStr := range tc.inputs {
 				origBytes := []byte(origStr)
 				compBytes := c.Compress(origBytes)
-				decompBytes := d.Decompress(compBytes)
+				decompBytes, _ := d.Decompress(compBytes)
 
 				if !bytes.Equal(origBytes, decompBytes) {
 					t.Errorf(`Roundtrip mismatch:
@@ -77,10 +77,86 @@ func readTestData(t testing.TB, fileName string) ([]string, int64) {
 	return lines, totalSize
 }
 
+func calculateWeightedAverageRatio(t *testing.T, filePaths []string) float64 {
+	t.Helper()
+
+	var totalOriginalSize, totalCompressedSize int64
+
+	for _, path := range filePaths {
+		lines, originalSize := readTestData(t, filepath.Base(path))
+		if len(lines) == 0 {
+			continue
+		}
+
+		totalOriginalSize += originalSize
+
+		dict := Build(lines)
+		c, _ := NewCompressor(dict)
+
+		for _, line := range lines {
+			totalCompressedSize += int64(len(c.Compress([]byte(line))))
+		}
+	}
+
+	if totalOriginalSize == 0 {
+		t.Fatal("Total original size for ratio calculation was zero.")
+	}
+
+	return float64(totalCompressedSize) / float64(totalOriginalSize)
+}
+
+func TestIndividualCompressionRatios(t *testing.T) {
+	testCases := []struct {
+		filename string
+		maxRatio float64
+	}{
+		{"urls", 0.5},
+		{"email", 0.49},
+		{"ruwiki", 0.391},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.filename, func(t *testing.T) {
+			path := filepath.Join("testdata", tc.filename)
+
+			ratio := calculateWeightedAverageRatio(t, []string{path})
+			t.Logf("Ratio for %s: %.4f", tc.filename, ratio)
+
+			if ratio > tc.maxRatio {
+				t.Errorf("Compression ratio has regressed! %v: got %.4f, want <= %.4f", tc.filename, ratio, tc.maxRatio)
+			}
+		})
+	}
+}
+
+func TestAverageCompressionRatio(t *testing.T) {
+	if testing.Short() {
+		t.Skip("Skipping average compression ratio test in short mode.")
+	}
+	const expectedMaxAverageRatio = 0.45
+
+	testFiles, err := filepath.Glob(filepath.Join("testdata", "*"))
+	if err != nil {
+		t.Fatalf("Failed to glob for test data files: %v", err)
+	}
+	if len(testFiles) == 0 {
+		t.Skip("No test data files found to calculate average ratio.")
+	}
+
+	averageRatio := calculateWeightedAverageRatio(t, testFiles)
+
+	t.Logf("Weighted average compression ratio across %d files: %.4f", len(testFiles), averageRatio)
+
+	if averageRatio > expectedMaxAverageRatio {
+		t.Errorf("Average compression ratio has regressed! got %.4f, want <= %.4f",
+			averageRatio, expectedMaxAverageRatio)
+	}
+}
+
 func benchmarkCompress(b *testing.B, filename string) {
 	lines, totalBytes := readTestData(b, filename)
 	dict := Build(lines)
-	c := NewCompressor(dict)
+	c, _ := NewCompressor(dict)
 
 	byteLines := make([][]byte, len(lines))
 	for i, s := range lines {
@@ -106,8 +182,8 @@ func benchmarkCompress(b *testing.B, filename string) {
 func benchmarkDecompress(b *testing.B, filename string) {
 	lines, totalBytes := readTestData(b, filename)
 	dict := Build(lines)
-	c := NewCompressor(dict)
-	d := NewDecompressor(dict)
+	c, _ := NewCompressor(dict)
+	d, _ := NewDecompressor(dict)
 
 	compressedLines := make([][]byte, len(lines))
 	for i, s := range lines {
@@ -121,7 +197,7 @@ func benchmarkDecompress(b *testing.B, filename string) {
 
 	lineIdx := 0
 	for i := 0; i < b.N; i++ {
-		_ = d.Decompress(compressedLines[lineIdx])
+		_, _ = d.Decompress(compressedLines[lineIdx])
 
 		lineIdx++
 		if lineIdx >= len(compressedLines) {
